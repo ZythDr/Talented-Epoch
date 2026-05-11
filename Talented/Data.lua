@@ -32,7 +32,6 @@ end
 -- Generated Data, do not modify
 do
 	local tabdata = {
-		},
 		WARRIOR = {
 			{background = "WarriorArms"},
 			{background = "WarriorFury"},
