@@ -1,10 +1,11 @@
 ## Interface: 30300
-## Title: Talented
-## Notes: The Talent Template Editor
-## Author: Jerry (Kader Edition)
-## Version: v2.4.8
+## Title: Talented-Epoch
+## Name: Talented-Epoch
+## Notes: Talent calculator for Project Epoch.
+## Author: Epoch Fork: ZythDr, based on Talented_WotLK (Kader Edition)
+## Version: 0.1.0
 ## OptionalDeps: Ace3
-## SavedVariables: TalentedDB
+## SavedVariables: TalentedDB TalentScanDB
 ## LoadManagers: Talented_Loader AddonLoader
 ## X-Category: Interface Enhancements
 ## X-LoadOn-Execute: local N = "ToggleTalentFrame" local P = _G[N] local function f() if _G[N] == f then _G[N] = P end local T = "Talented" AddonLoader:LoadAddOn(T) local t = _G[T] if t then t[N](t) else P() end end _G[N] = f
@@ -15,15 +16,12 @@
 ## X-LoadOn-INSPECT_TALENT_READY: if IsAddOnLoaded"Talented" or not InspectFrame or not InspectFrame:IsShown() then return end AddonLoader:LoadAddOn"Talented" if Talented then Talented:INSPECT_TALENT_READY() end
 ## X-LoadOn-USE_GLYPH: if IsAddOnLoaded"Talented" then return end AddonLoader:LoadAddOn"Talented" if Talented then Talented:GLYPHFRAME_OPEN() end
 ## X-LoadOn-CONFIRM_TALENT_WIPE: if IsAddOnLoaded"Talented" then return end AddonLoader:LoadAddOn"Talented" if Talented then Talented:CONFIRM_TALENT_WIPE() end
-## X-Curse-Packaged-Version: v2.4.6c-release
-## X-Curse-Project-Name: Talented
-## X-Curse-Project-ID: talented
-## X-Curse-Repository-ID: wow/talented/mainline
 Libs\Libs.xml
 Locales\Locales.xml
 Talented.lua
 Options.lua
 Data.lua
+## Scanner.lua
 Exporters.lua
 Ui.lua
 Glyphs.lua

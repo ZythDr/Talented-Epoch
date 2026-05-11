@@ -16,7 +16,11 @@ Talented.defaults = {
 		restore_bars = false
 	},
 	global = {templates = {}},
-	char = {targets = {}}
+	char = {
+		targets = {},
+		specs = {},
+		activeSpec = 1,
+	}
 }
 
 function Talented:SetOption(info, value)

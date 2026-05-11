@@ -72,6 +72,8 @@ do
 	end
 
 	function Talented:OnInitialize()
+		self.playerClass = select(2, UnitClass "player")
+		self.playerRace = select(2, UnitRace "player")
 		self.db = LibStub("AceDB-3.0"):New("TalentedDB", self.defaults)
 		self:UpgradeOptions()
 		self:LoadTemplates()
@@ -103,14 +105,14 @@ do
 
 	function Talented:DeleteCurrentTemplate()
 		local template = self.template
-		if template.talentGroup then return end
+		if template.talentGroup or template == self.pet_current then return end
 		local templates = self.db.global.templates
 		templates[template.name] = nil
 		self:SetTemplate()
 	end
 
 	function Talented:UpdateTemplateName(template, newname)
-		if self.db.global.templates[newname] or template.talentGroup or type(newname) ~= "string" or newname == "" then return end
+		if self.db.global.templates[newname] or template.talentGroup or template == self.pet_current or type(newname) ~= "string" or newname == "" then return end
 
 		local oldname = template.name
 		template.name = newname
@@ -393,108 +395,71 @@ end
 --
 
 do
-	local function handle_ranks(...)
-		local result = {}
-		local first = (...)
-		local pos, row, column, req = 1
-		local c = string.byte(first, pos)
-		if c == 42 then
-			row, column = nil, -1
-			pos = pos + 1
-			c = string.byte(first, pos)
-		elseif c > 32 and c <= 40 then
-			column = c - 32
-			if column > 4 then
-				row = true
-				column = column - 4
-			end
-			pos = pos + 1
-			c = string.byte(first, pos)
-		end
-		if c >= 65 and c <= 90 then
-			req = c - 64
-			pos = pos + 1
-		elseif c >= 97 and c <= 122 then
-			req = 96 - c
-			pos = pos + 1
-		end
-		result[1] = tonumber(first:sub(pos))
-		for i = 2, select("#", ...) do
-			result[i] = tonumber((select(i, ...)))
-		end
-		local entry = {
-			ranks = result,
-			row = row,
-			column = column,
-			req = req
-		}
-		if not result[1] then
-			entry.req = nil
-			entry.ranks = nil
-			entry.inactive = true
-		end
-		return entry
-	end
-
-	local function next_talent_pos(row, column)
-		column = column + 1
-		if column >= 5 then
-			return row + 1, 1
-		else
-			return row, column
-		end
-	end
-
-	local function handle_talents(...)
-		local result = {}
-		for talent = 1, select("#", ...) do
-			result[talent] = handle_ranks(strsplit(";", (select(talent, ...))))
-		end
-		local row, column = 1, 1
-		for index, talent in ipairs(result) do
-			local drow, dcolumn = talent.row, talent.column
-			if dcolumn == -1 then
-				talent.row, talent.column = result[index - 1].row, result[index - 1].column
+	local function handle_ranks(data, target)
+		local row, column = 1, 0
+		for val in string.gmatch(data, "([^,]+)") do
+			local talent = {}
+			local c = string.byte(val, 1)
+			if c == 42 then
 				talent.inactive = true
-			elseif dcolumn then
-				if drow then
-					row = row + 1
-					column = dcolumn
-				else
-					column = column + dcolumn
-				end
-				talent.row, talent.column = row, column
+				val = string.sub(val, 2)
+				c = string.byte(val, 1)
+			elseif c > 32 and c <= 47 then
+				local offset = c - 32
+				column = ((offset - 1) % 5) + 1
+				row = row + math.floor((offset - 1) / 5)
+				val = string.sub(val, 2)
+				c = string.byte(val, 1)
 			else
-				talent.row, talent.column = row, column
+				column = column + 1
+				if column > 5 then
+					column, row = 1, row + 1
+				end
 			end
-			if dcolumn ~= -1 or drow then
-				row, column = next_talent_pos(row, column)
+			if c and c >= 65 and c <= 90 then
+				talent.req = c - 64
+				val = string.sub(val, 2)
+			elseif c and c >= 97 and c <= 122 then
+				talent.req = 96 - c
+				val = string.sub(val, 2)
 			end
-			if talent.req then
-				talent.req = talent.req + index
-				assert(talent.req > 0 and talent.req <= #result)
+			talent.ranks = {strsplit(";", val)}
+			for i, v in ipairs(talent.ranks) do
+				talent.ranks[i] = tonumber(v)
 			end
+			if not talent.ranks[1] then
+				talent.ranks = nil
+			end
+			talent.row, talent.column = row, column
+			target[#target + 1] = talent
 		end
-		return result
-	end
-
-	local function handle_tabs(...)
-		local result = {}
-		for tab = 1, select("#", ...) do
-			result[tab] = handle_talents(strsplit(",", (select(tab, ...))))
-		end
-		return result
 	end
 
 	function Talented:UncompressSpellData(class)
-		local data = self.spelldata[class]
-		if type(data) == "table" then
-			return data
+		local spelldata = self.spelldata[class]
+		if not spelldata or type(spelldata) == "table" then
+			return spelldata
 		end
-		self:Debug("UNCOMPRESS CLASSDATA", class)
-		data = handle_tabs(strsplit("|", data))
+		local data = {}
 		self.spelldata[class] = data
-		if class == select(2, UnitClass("player")) then
+		for i, tree in ipairs({strsplit("|", spelldata)}) do
+			data[i] = {}
+			handle_ranks(tree, data[i])
+			if i > 1 then
+				for index, talent in ipairs(data[i]) do
+					if talent.req then
+						talent.req = talent.req + index
+					end
+				end
+			else
+				for index, talent in ipairs(data[i]) do
+					if talent.req then
+						talent.req = talent.req + index
+					end
+				end
+			end
+		end
+		if class == select(2, UnitClass "player") then
 			self:CheckSpellData(class)
 		end
 		return data
@@ -575,11 +540,21 @@ do
 	end
 
 	function Talented:GetTalentName(class, tab, index)
+		local isPet = (class == "Cunning" or class == "Tenacity" or class == "Ferocity")
+		if not isPet then
+			local name = GetTalentInfo(tab, index)
+			if name then return name end
+		end
 		local spell = self:UncompressSpellData(class)[tab][index].ranks[1]
 		return (GetSpellInfo(spell))
 	end
 
 	function Talented:GetTalentIcon(class, tab, index)
+		local isPet = (class == "Cunning" or class == "Tenacity" or class == "Ferocity")
+		if not isPet then
+			local _, icon = GetTalentInfo(tab, index)
+			if icon then return icon end
+		end
 		local spell = self:UncompressSpellData(class)[tab][index].ranks[1]
 		return (select(3, GetSpellInfo(spell)))
 	end
@@ -692,17 +667,8 @@ do
 					if talent.inactive then
 						return DisableTalented("%s:%d:%d NOT INACTIVE", class, tab, index)
 					end
-					local found
-					for _, spell in ipairs(talent.ranks) do
-						if GetSpellInfo(spell) == name then
-							found = true
-							break
-						end
-					end
-					if not found then
-						local s, n = pcall(GetSpellInfo, talent.ranks[1])
-						return DisableTalented("%s:%d:%d MISMATCHED %d ~= %s", class, tab, index, n or "unknown talent-" .. talent.ranks[1], name)
-					end
+					-- Spell-ID name validation skipped: custom server uses different IDs.
+					-- Names/icons come from GetTalentInfo() at runtime instead.
 					if row ~= talent.row then
 						print("invalid row for talent", tab, index, row, talent.row)
 						invalid = true
@@ -1034,7 +1000,7 @@ do
 	end
 
 	function Talented:PackTemplate(template)
-		if not template or template.talentGroup or template.code then return end
+		if not template or template.talentGroup or template == self.pet_current or template.code then return end
 		self:Debug("PACK TEMPLATE", template.name)
 		template.code = self:TemplateToString(template)
 		for tab in ipairs(template) do
@@ -1083,12 +1049,17 @@ do
 	local GetTalentInfo = GetTalentInfo
 
 	function Talented:UpdatePlayerSpecs()
-		if GetNumTalentTabs() == 0 then return end
-		local class = select(2, UnitClass "player")
-		local info = self:UncompressSpellData(class)
 		if not self.alternates then
 			self.alternates = {}
 		end
+		if not self.spelldata then return end
+		local class = self.playerClass
+		if not class or not self.spelldata[class] then return end
+		local spec = self.db.char.activeSpec or 1
+		if not self.db.char.specs then self.db.char.specs = {} end
+		local data = self.db.char.specs[spec]
+		local info = self:UncompressSpellData(class)
+		if not info then return end
 		for talentGroup = 1, GetNumTalentGroups() do
 			local template = self.alternates[talentGroup]
 			if not template then
@@ -1124,7 +1095,7 @@ do
 		if not self.alternates then
 			self:UpdatePlayerSpecs()
 		end
-		return self.alternates[GetActiveTalentGroup()]
+		return self.alternates and self.alternates[GetActiveTalentGroup()]
 	end
 
 	function Talented:UpdateView()
@@ -1149,10 +1120,11 @@ do
 			LAYOUT_OFFSET_X = offset
 			LAYOUT_OFFSET_Y = LAYOUT_OFFSET_X
 
-			LAYOUT_DELTA_X = LAYOUT_OFFSET_X / 2
+			LAYOUT_DELTA_X = 40 -- Adjusted to center 4-column trees
 			LAYOUT_DELTA_Y = LAYOUT_OFFSET_Y / 2
-
-			LAYOUT_SIZE_X --[[LAYOUT_MAX_COLUMNS]] = 4 * LAYOUT_OFFSET_X + LAYOUT_DELTA_X
+ 
+			LAYOUT_SIZE_X = 5 * LAYOUT_OFFSET_X + 14
+			TAB_SPACING = LAYOUT_SIZE_X
 
 			return true
 		end
@@ -1212,8 +1184,15 @@ do
 				bottom_offset = bottom_offset + LAYOUT_BASE_Y
 			end
 		end
-		local first_tree = talents[1]
-		local size_y = first_tree[#first_tree].row * LAYOUT_OFFSET_Y + LAYOUT_DELTA_Y
+		local max_rows = 0
+		for _, tree in ipairs(talents) do
+			for _, talent in ipairs(tree) do
+				if talent.row > max_rows then
+					max_rows = talent.row
+				end
+			end
+		end
+		local size_y = max_rows * LAYOUT_OFFSET_Y + LAYOUT_DELTA_Y
 		for tab, tree in ipairs(talents) do
 			local frame = Talented:MakeTalentFrame(self.frame, LAYOUT_SIZE_X, size_y)
 			frame.tab = tab
@@ -1293,16 +1272,24 @@ do
 
 	function TalentView:GetReqLevel(total)
 		if not self.pet then
-			return total == 0 and 1 or total + 9
+			if total == 0 then return 9 end
+			local level = 10
+			local points = 1
+			while points < total and level < 60 do
+				level = level + 1
+				local last_digit = level % 10
+				if last_digit == 4 or last_digit == 9 then
+					points = points + 2
+				else
+					points = points + 1
+				end
+			end
+			return level
 		else
 			if total == 0 then
 				return 10
 			end
-			if total > 16 then
-				return 60 + (total - 15) * 4 -- this spec requires Beast Mastery
-			else
-				return 16 + total * 4
-			end
+			return math.max(10, total * 4)
 		end
 	end
 
@@ -1388,7 +1375,7 @@ do
 			frame.name:SetFormattedText(L["%s (%d)"], Talented.tabdata[template.class][tab].name, count)
 			total = total + count
 			local clear = frame.clear
-			if self.mode ~= "edit" or count <= 0 or self.spec then
+			if self.mode ~= "edit" or count <= 0 or self.spec or template == Talented.pet_current then
 				clear:Hide()
 			else
 				clear:Show()
@@ -1414,7 +1401,7 @@ do
 		end
 		local pointsleft = self.frame.pointsleft
 		if pointsleft then
-			if maxpoints ~= total and template.talentGroup then
+			if maxpoints ~= total and (template.talentGroup or template == Talented.pet_current) then
 				pointsleft:Show()
 				pointsleft.text:SetFormattedText(L["You have %d talent |4point:points; left"], maxpoints - total)
 			else
@@ -1423,7 +1410,7 @@ do
 		end
 		local edit = self.frame.editname
 		if edit then
-			if template.talentGroup then
+			if template.talentGroup or template == Talented.pet_current then
 				edit:Hide()
 			else
 				edit:Show()
@@ -1525,7 +1512,7 @@ do
 
 	function TalentView:ClearTalentTab(t)
 		local template = self.template
-		if template and not template.talentGroup then
+		if template and not template.talentGroup and template ~= Talented.pet_current then
 			local tab = template[t]
 			for index, value in ipairs(tab) do
 				tab[index] = 0
@@ -1594,7 +1581,8 @@ do
 	local ipairs = ipairs
 
 	function Talented:IsTemplateAtCap(template)
-		local max = RAID_CLASS_COLORS[template.class] and 71 or 20
+		-- Level 60 cap on Project Epoch: player gets 61 points (equivalent to level 70), pet gets 15 (strict cap)
+		local max = RAID_CLASS_COLORS[template.class] and 61 or 15
 		return self.db.profile.level_cap and self:GetPointCount(template) >= max
 	end
 
@@ -1617,7 +1605,7 @@ do
 
 	function Talented:ClearTalentTab(t)
 		local template = self.template
-		if template and not template.talentGroup and self.mode == "edit" then
+		if template and not template.talentGroup and template ~= self.pet_current and self.mode == "edit" then
 			local tab = template[t]
 			for index, value in ipairs(tab) do
 				tab[index] = 0
@@ -1972,14 +1960,23 @@ do
 			end
 			if rank < ranks then
 				if rank > 0 then
-					addline("|n" .. TOOLTIP_TALENT_NEXT_RANK, HIGHLIGHT_FONT_COLOR)
+					local next_rank_line
+					local locale = GetLocale()
+					if locale == "enUS" or locale == "enGB" then
+						next_rank_line = "Next rank:"
+					else
+						next_rank_line = string.gsub(TOOLTIP_TALENT_NEXT_RANK, "|n", " ")
+						next_rank_line = string.gsub(next_rank_line, "[\r\n%s]+", " ")
+					end
+					addline(" ", HIGHLIGHT_FONT_COLOR)
+					addline(next_rank_line, HIGHLIGHT_FONT_COLOR)
 				end
 				addtipline(self:GetTalentDesc(class, tab, index, rank + 1))
 			end
 		end
 		local s = self:GetTalentState(template, tab, index)
 		if self.mode == "edit" then
-			if template.talentGroup then
+			if template.talentGroup or template == self.pet_current then
 				if s == "available" or s == "empty" then
 					addline(TOOLTIP_TALENT_LEARN, GREEN_FONT_COLOR)
 				end
@@ -2000,6 +1997,46 @@ do
 				addline(TALENT_TOOLTIP_ADDPREVIEWPOINT, GREEN_FONT_COLOR)
 			end
 		end
+
+		if info and info.ranks then
+			local id_str
+			if IsAltKeyDown() then
+				local ids = {}
+				for i = 1, ranks do
+					local spellId = info.ranks[i]
+					if spellId then
+						table.insert(ids, string.format("|cFFFFFFFF%d|r", spellId))
+					end
+				end
+				if #ids > 0 then
+					id_str = string.format("|cFF909090Spell IDs:|r %s", table.concat(ids, ", "))
+				end
+			else
+				if rank == 0 then
+					local spellId = info.ranks[1]
+					if spellId then
+						id_str = string.format("|cFF909090Spell ID:|r |cFFFFFFFF%d|r |cFF909090(Rank 1)|r", spellId)
+					end
+				elseif rank == ranks then
+					local spellId = info.ranks[ranks]
+					if spellId then
+						id_str = string.format("|cFF909090Spell ID:|r |cFFFFFFFF%d|r", spellId)
+					end
+				else
+					local curSpell = info.ranks[rank]
+					local nextSpell = info.ranks[rank + 1]
+					if curSpell and nextSpell then
+						id_str = string.format("|cFF909090Spell ID:|r |cFFFFFFFF%d|r |cFF909090(Cur) /|r |cFFFFFFFF%d|r |cFF909090(Next)|r", curSpell, nextSpell)
+					elseif curSpell then
+						id_str = string.format("|cFF909090Spell ID:|r |cFFFFFFFF%d|r", curSpell)
+					end
+				end
+			end
+			if id_str then
+				addline(id_str, NORMAL_FONT_COLOR)
+			end
+		end
+
 		GameTooltip:Show()
 	end
 
@@ -2284,8 +2321,17 @@ do
 	end
 
 	function Talented:GetPetClass()
-		local _, _, _, texture = GetTalentTabInfo(1, nil, true)
-		return texture and texture:sub(10)
+		if not UnitExists("pet") or not HasPetSpells() then return nil end
+		local name = GetTalentTabInfo(1, false, true)
+		if name == "Cunning" or name == "Tenacity" or name == "Ferocity" then
+			return name
+		end
+		-- Fallback to creature family if tab name doesn't match
+		local family = UnitCreatureFamily("pet")
+		if family == "Cunning" or family == "Tenacity" or family == "Ferocity" then
+			return family
+		end
+		return nil
 	end
 
 	local function PetTalentsAvailable()
@@ -2319,8 +2365,7 @@ do
 			end
 		end
 		for _, view in self:IterateTalentViews(template) do
-			view:SetClass(class)
-			view:Update()
+			view:SetTemplate(template)
 		end
 		if self.mode == "apply" then
 			self:CheckTalentPointsApplied()
@@ -2341,7 +2386,9 @@ do
 
 	function Talented:FixAlternatesTalents(class)
 		local talentGroup = GetActiveTalentGroup(nil, true)
-		local data = self:UncompressSpellData(class)[1]
+		local info = self:UncompressSpellData(class)
+		if not info or not info[1] then return end
+		local data = info[1]
 		for index = 1, #data - 1 do
 			local info = data[index]
 			local ninfo = data[index + 1]
