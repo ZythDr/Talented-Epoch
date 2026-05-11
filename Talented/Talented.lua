@@ -398,18 +398,20 @@ do
 	local function handle_ranks(data, target)
 		local row, column = 1, 0
 		for val in string.gmatch(data, "([^,]+)") do
+			local v = val
 			local talent = {}
-			local c = string.byte(val, 1)
+			local c = string.byte(v, 1)
 			if c == 42 then
 				talent.inactive = true
-				val = string.sub(val, 2)
-				c = string.byte(val, 1)
-			elseif c > 32 and c <= 47 then
+				v = string.sub(v, 2)
+				c = string.byte(v, 1)
+			end
+			if c and c > 32 and c <= 47 then
 				local offset = c - 32
 				column = ((offset - 1) % 5) + 1
 				row = row + math.floor((offset - 1) / 5)
-				val = string.sub(val, 2)
-				c = string.byte(val, 1)
+				v = string.sub(v, 2)
+				c = string.byte(v, 1)
 			else
 				column = column + 1
 				if column > 5 then
@@ -418,14 +420,14 @@ do
 			end
 			if c and c >= 65 and c <= 90 then
 				talent.req = c - 64
-				val = string.sub(val, 2)
+				v = string.sub(v, 2)
 			elseif c and c >= 97 and c <= 122 then
 				talent.req = 96 - c
-				val = string.sub(val, 2)
+				v = string.sub(v, 2)
 			end
-			talent.ranks = {strsplit(";", val)}
-			for i, v in ipairs(talent.ranks) do
-				talent.ranks[i] = tonumber(v)
+			talent.ranks = {strsplit(";", v)}
+			for i, r_val in ipairs(talent.ranks) do
+				talent.ranks[i] = tonumber(r_val)
 			end
 			if not talent.ranks[1] then
 				talent.ranks = nil
@@ -433,6 +435,13 @@ do
 			talent.row, talent.column = row, column
 			target[#target + 1] = talent
 		end
+	end
+
+	local function normalize_key(name)
+		if not name then return "" end
+		name = name:lower()
+		name = name:gsub("[%s%-%p%’%‘%\"%\']", "")
+		return name
 	end
 
 	function Talented:UncompressSpellData(class)
@@ -445,20 +454,78 @@ do
 		for i, tree in ipairs({strsplit("|", spelldata)}) do
 			data[i] = {}
 			handle_ranks(tree, data[i])
-			if i > 1 then
-				for index, talent in ipairs(data[i]) do
-					if talent.req then
-						talent.req = talent.req + index
+			for index, talent in ipairs(data[i]) do
+				if talent.req then
+					talent.req = talent.req + index
+				end
+			end
+		end
+
+		-- Set talent names from self.talent_names if available
+		local names_by_tab = self.talent_names and self.talent_names[class]
+		for i, tree in ipairs(data) do
+			local names = names_by_tab and names_by_tab[i]
+			for index, talent in ipairs(tree) do
+				if names and names[index] then
+					talent.name = names[index]
+				end
+			end
+		end
+
+		-- Dynamic runtime mapping from standard retail spell IDs
+		local retail_str = self.retail_spelldata and self.retail_spelldata[class]
+		if retail_str then
+			-- Uncompress retail spell data
+			local retail_data = {}
+			for i, tree in ipairs({strsplit("|", retail_str)}) do
+				retail_data[i] = {}
+				handle_ranks(tree, retail_data[i])
+			end
+
+			-- Build localized name -> spell ranks mapping
+			local spell_map = {}
+			for i, tree in ipairs(retail_data) do
+				for _, talent in ipairs(tree) do
+					if talent.ranks and talent.ranks[1] then
+						local name = GetSpellInfo(talent.ranks[1])
+						if name then
+							spell_map[normalize_key(name)] = talent.ranks
+						end
 					end
 				end
-			else
-				for index, talent in ipairs(data[i]) do
-					if talent.req then
-						talent.req = talent.req + index
+			end
+
+			-- Assign standard retail spell IDs to custom layouts by matching name
+			for i, tree in ipairs(data) do
+				for _, talent in ipairs(tree) do
+					if talent.name then
+						local norm = normalize_key(talent.name)
+						local ranks = spell_map[norm]
+						
+						local is_empty = true
+						for r_idx, r_val in ipairs(talent.ranks) do
+							if r_val ~= 0 and r_val ~= "0" and r_val ~= "" then
+								is_empty = false
+								break
+							end
+						end
+						
+						if is_empty then
+							if ranks then
+								-- Copy ranks to talent, ensuring correct rank count
+								for r_idx = 1, #talent.ranks do
+									talent.ranks[r_idx] = ranks[r_idx] or ranks[#ranks] or 0
+								end
+							else
+								-- This talent is truly missing/unresolved!
+								print("|cffff3333[Talented-Epoch]|r Unresolved talent: " .. class .. " -> " .. talent.name)
+							end
+						end
 					end
 				end
 			end
 		end
+
 		if class == select(2, UnitClass "player") then
 			self:CheckSpellData(class)
 		end
@@ -541,45 +608,81 @@ do
 
 	function Talented:GetTalentName(class, tab, index)
 		local isPet = (class == "Cunning" or class == "Tenacity" or class == "Ferocity")
-		if not isPet then
+		if not isPet and class == select(2, UnitClass"player") then
 			local name = GetTalentInfo(tab, index)
 			if name then return name end
 		end
-		local spell = self:UncompressSpellData(class)[tab][index].ranks[1]
-		return (GetSpellInfo(spell))
+		-- Try Talent Names table first
+		if self.talent_names and self.talent_names[class] and self.talent_names[class][tab] then
+			local name = self.talent_names[class][tab][index]
+			if name then return name end
+		end
+		local data = self:UncompressSpellData(class)
+		if data and data[tab] and data[tab][index] then
+			local spell = data[tab][index].ranks[1]
+			if spell and spell ~= 0 and spell ~= "0" then
+				local name = GetSpellInfo(spell)
+				if name then return name end
+			end
+		end
+		return "Unknown Talent"
 	end
 
 	function Talented:GetTalentIcon(class, tab, index)
 		local isPet = (class == "Cunning" or class == "Tenacity" or class == "Ferocity")
-		if not isPet then
+		if not isPet and class == select(2, UnitClass"player") then
 			local _, icon = GetTalentInfo(tab, index)
 			if icon then return icon end
 		end
-		local spell = self:UncompressSpellData(class)[tab][index].ranks[1]
-		return (select(3, GetSpellInfo(spell)))
+		local data = self:UncompressSpellData(class)
+		if data and data[tab] and data[tab][index] then
+			local spell = data[tab][index].ranks[1]
+			if spell and spell ~= 0 and spell ~= "0" then
+				local _, _, icon = GetSpellInfo(spell)
+				if icon then return icon end
+			end
+		end
+		-- Try Talent Icons table next
+		if self.talent_icons and self.talent_icons[class] and self.talent_icons[class][tab] then
+			local icon = self.talent_icons[class][tab][index]
+			if icon then return icon end
+		end
+		return "Interface\\Icons\\INV_Misc_QuestionMark"
 	end
 
 	function Talented:GetTalentDesc(class, tab, index, rank)
 		if not spellTooltip then
 			spellTooltip = CreateSpellTooltip()
 		end
-		local spell = self:UncompressSpellData(class)[tab][index].ranks[rank]
-		return self.spellDescCache[spell]
+		local data = self:UncompressSpellData(class)
+		if data and data[tab] and data[tab][index] then
+			local spell = data[tab][index].ranks[rank]
+			if spell and spell ~= 0 and spell ~= "0" then
+				return self.spellDescCache[spell] or "No description available"
+			end
+		end
+		return "No description available"
 	end
 
 	function Talented:GetTalentPos(class, tab, index)
-		local talent = self:UncompressSpellData(class)[tab][index]
-		return talent.row, talent.column
+		local data = self:UncompressSpellData(class)
+		local talent = data and data[tab] and data[tab][index]
+		if talent then
+			return talent.row, talent.column
+		end
+		return 1, 1
 	end
 
 	function Talented:GetTalentPrereqs(class, tab, index)
-		local talent = self:UncompressSpellData(class)[tab][index]
-		return talent.req
+		local data = self:UncompressSpellData(class)
+		local talent = data and data[tab] and data[tab][index]
+		return talent and talent.req
 	end
 
 	function Talented:GetTalentRanks(class, tab, index)
-		local talent = self:UncompressSpellData(class)[tab][index]
-		return #talent.ranks
+		local data = self:UncompressSpellData(class)
+		local talent = data and data[tab] and data[tab][index]
+		return talent and talent.ranks and #talent.ranks or 0
 	end
 
 	function Talented:GetTalentLink(template, tab, index, rank)
@@ -652,11 +755,18 @@ do
 				end
 			end
 			for index = 1, GetNumTalents(tab) do
+				local name, icon, row, column, _, ranks = GetTalentInfo(tab, index)
 				local talent = talents[index]
 				if not talent then
-					return DisableTalented("%s:%d:%d MISSING TALENT", class, tab, index)
+					print("missing talent dynamically created", class, tab, index, name)
+					talent = {
+						ranks = {},
+						row = row or 1,
+						column = column or 1,
+					}
+					talents[index] = talent
+					invalid = true
 				end
-				local name, icon, row, column, _, ranks = GetTalentInfo(tab, index)
 				if not name then
 					if not talent.inactive then
 						print("inactive talent", class, tab, index)
@@ -665,7 +775,9 @@ do
 					end
 				else
 					if talent.inactive then
-						return DisableTalented("%s:%d:%d NOT INACTIVE", class, tab, index)
+						print("talent active, clearing inactive state", class, tab, index)
+						talent.inactive = nil
+						invalid = true
 					end
 					-- Spell-ID name validation skipped: custom server uses different IDs.
 					-- Names/icons come from GetTalentInfo() at runtime instead.
@@ -680,7 +792,11 @@ do
 						talent.column = column
 					end
 					if ranks > #talent.ranks then
-						return DisableTalented("%s:%d:%d MISSING RANKS %d ~= %d", class, tab, index, #talent.ranks, ranks)
+						print("missing ranks for talent, padding ranks", tab, index, #talent.ranks, ranks)
+						invalid = true
+						for i = #talent.ranks + 1, ranks do
+							talent.ranks[i] = talent.ranks[1] or 0
+						end
 					end
 					if ranks < #talent.ranks then
 						invalid = true
@@ -751,7 +867,6 @@ do
 		"SHAMAN",
 		"WARLOCK",
 		"WARRIOR",
-		"DEATHKNIGHT",
 		"Ferocity",
 		"Cunning",
 		"Tenacity"
