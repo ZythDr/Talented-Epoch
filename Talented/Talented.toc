@@ -3,7 +3,7 @@
 ## Name: Talented-Epoch
 ## Notes: Talent calculator for Project Epoch.
 ## Author: Epoch Fork: ZythDr, based on Talented_WotLK (Kader Edition)
-## Version: 0.2.0
+## Version: 0.2.1
 ## OptionalDeps: Ace3
 ## SavedVariables: TalentedDB TalentScanDB
 ## LoadManagers: Talented_Loader AddonLoader

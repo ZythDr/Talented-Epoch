@@ -2,6 +2,14 @@
 
 All notable changes to the Talented port for Project Epoch.
 
+## [0.2.1] - 2026-05-11
+
+### Fixed
+
+- Fixed a syntax error in the generated talent database (`Data.lua`) that caused UI load and login failures.
+
+---
+
 ## [0.2.0] - 2026-05-11
 
 ### Added
